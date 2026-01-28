@@ -1,0 +1,342 @@
+---
+title: "ECON426: Panel Data Methods"
+format:
+  docx:
+    toc: false
+    number-sections: false
+---
+
+# Introduction
+
+In this assignment you will analyze panel data using pooled OLS, fixed effects, and random effects estimators. You will learn to choose between estimators using the Hausman test and apply two-way fixed effects with clustered standard errors.
+
+We will use the `nls_panel` dataset, which contains panel data on wages from the National Longitudinal Survey (NLS). The data is available in the `data/` folder. This dataset tracks the same individuals over multiple years, allowing us to estimate the returns to education and experience while controlling for unobserved individual characteristics.
+
+The topics you will cover are:
+
+1. Data Loading and Panel Structure
+2. Pooled OLS Estimation
+3. Fixed Effects Estimation
+4. Random Effects Estimation
+5. Hausman Test
+6. Two-Way Fixed Effects
+7. Clustered Standard Errors
+
+# 1. Data Loading and Panel Structure
+
+**Objective:**
+Load the panel data and understand its structure.
+
+**Instructions:**
+1. Load the nls_panel dataset from the local data folder.
+2. Examine the panel structure: how many individuals? How many years?
+3. Explore the key variables.
+
+**Code:**
+
+```{r}
+# Load packages
+if(!require("pacman")) install.packages("pacman")
+pacman::p_load(tidyverse, plm, fixest, jtools, knitr, lmtest)
+
+# Load the NLS panel data from local data folder
+nls_panel <- read.csv("data/nls_panel.csv")
+
+# Examine the data structure
+glimpse(nls_panel)
+```
+
+**Panel Dimensions:**
+
+```{r}
+# Check panel structure
+cat("Number of individuals:", length(unique(nls_panel$id)), "\n")
+cat("Number of years:", length(unique(nls_panel$year)), "\n")
+cat("Total observations:", nrow(nls_panel), "\n")
+
+# Years in the data
+cat("Years:", sort(unique(nls_panel$year)), "\n")
+```
+
+**Summary Statistics:**
+
+```{r}
+# Summary of key variables
+nls_panel %>%
+  select(lwage, educ, exper, tenure, union, black, south) %>%
+  summary()
+```
+
+**Question 1:** Is this a balanced or unbalanced panel? What does `lwage` represent? Why might we use log wages instead of wages in levels?
+
+# 2. Pooled OLS Estimation
+
+**Objective:**
+Estimate a baseline model using pooled OLS (ignoring panel structure).
+
+**Instructions:**
+1. Estimate a wage equation with education, experience, tenure, and other controls.
+2. Discuss why this estimate may be biased.
+
+**Code:**
+
+```{r}
+# Pooled OLS
+pooled <- lm(lwage ~ educ + exper + exper2 + tenure + tenure2 + union + black + south,
+             data = nls_panel)
+summ(pooled, digits = 4)
+```
+
+**Question 2:** Interpret the coefficient on education. What does it mean? Why might this estimate be biased if we ignore the panel structure?
+
+**The Problem:**
+
+```{r}
+# Visualize individual heterogeneity
+nls_panel %>%
+  filter(id %in% sample(unique(nls_panel$id), 20)) %>%
+  ggplot(aes(x = exper, y = lwage, group = id, color = factor(id))) +
+  geom_line(alpha = 0.7) +
+  geom_point(alpha = 0.5) +
+  labs(x = "Experience", y = "Log Wage",
+       title = "Individual Wage Trajectories (20 random individuals)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+# 3. Fixed Effects Estimation
+
+**Objective:**
+Estimate the model using fixed effects to control for unobserved individual characteristics.
+
+**Instructions:**
+1. Use the plm package to estimate a within (fixed effects) model.
+2. Also estimate using fixest for comparison.
+3. Compare to pooled OLS.
+
+**Code:**
+
+```{r}
+# Fixed effects using plm
+fe_plm <- plm(lwage ~ exper + exper2 + tenure + tenure2 + union + south,
+              data = nls_panel,
+              index = c("id", "year"),
+              model = "within")
+summary(fe_plm)
+```
+
+**Note:** Education and race are dropped from the FE model because they don't vary within individuals over time.
+
+**Using fixest:**
+
+```{r}
+# Fixed effects using fixest
+fe_fixest <- feols(lwage ~ exper + exper2 + tenure + tenure2 + union + south | id,
+                   data = nls_panel)
+summary(fe_fixest)
+```
+
+**Compare Pooled OLS and FE:**
+
+```{r}
+# Compare (note: different variables due to time-invariant being dropped)
+pooled_comparable <- lm(lwage ~ exper + exper2 + tenure + tenure2 + union + south,
+                        data = nls_panel)
+
+export_summs(pooled_comparable, fe_fixest,
+             model.names = c("Pooled OLS", "Fixed Effects"),
+             digits = 4)
+```
+
+**Question 3:**
+a) Why can't we estimate the effect of education in a fixed effects model?
+b) How does the coefficient on union membership change between pooled OLS and FE? What might explain this?
+
+# 4. Random Effects Estimation
+
+**Objective:**
+Estimate the model using random effects.
+
+**Instructions:**
+1. Estimate a random effects model using plm.
+2. Note that we can include time-invariant variables with RE.
+
+**Code:**
+
+```{r}
+# Random effects using plm
+re_plm <- plm(lwage ~ educ + exper + exper2 + tenure + tenure2 + union + black + south,
+              data = nls_panel,
+              index = c("id", "year"),
+              model = "random")
+summary(re_plm)
+```
+
+**Compare All Three (where possible):**
+
+```{r}
+# Compare RE with pooled (both have education)
+export_summs(pooled, re_plm,
+             model.names = c("Pooled OLS", "Random Effects"),
+             digits = 4)
+```
+
+**Question 4:** What assumption does random effects make about individual effects? How does the estimate of returns to education change between pooled OLS and RE?
+
+# 5. Hausman Test
+
+**Objective:**
+Use the Hausman test to choose between fixed and random effects.
+
+**Instructions:**
+1. Estimate comparable FE and RE models (same variables).
+2. Conduct the Hausman test.
+3. Interpret the results.
+
+**Code:**
+
+```{r}
+# Need models with same variables for Hausman test
+fe_hausman <- plm(lwage ~ exper + exper2 + tenure + tenure2 + union + south,
+                  data = nls_panel,
+                  index = c("id", "year"),
+                  model = "within")
+
+re_hausman <- plm(lwage ~ exper + exper2 + tenure + tenure2 + union + south,
+                  data = nls_panel,
+                  index = c("id", "year"),
+                  model = "random")
+
+# Hausman test
+hausman_test <- phtest(fe_hausman, re_hausman)
+print(hausman_test)
+```
+
+**Interpretation:**
+
+- **$H_0$:** Random effects is consistent (individual effects uncorrelated with regressors)
+- **$H_a$:** Random effects is inconsistent (use fixed effects)
+- Small p-value → Reject $H_0$ → Use Fixed Effects
+
+**Question 5:** Based on the Hausman test, which estimator should you use? What does the result suggest about the correlation between individual unobserved effects and the explanatory variables?
+
+# 6. Two-Way Fixed Effects
+
+**Objective:**
+Add time fixed effects to control for year-specific shocks.
+
+**Instructions:**
+1. Estimate a model with both individual and year fixed effects.
+2. Discuss what time fixed effects control for.
+
+**Code:**
+
+```{r}
+# Individual FE only
+fe_individual <- feols(lwage ~ exper + exper2 + tenure + tenure2 + union + south | id,
+                       data = nls_panel)
+
+# Year FE only
+fe_year <- feols(lwage ~ educ + exper + exper2 + tenure + tenure2 + union + black + south | year,
+                 data = nls_panel)
+
+# Two-way fixed effects
+twfe <- feols(lwage ~ exper + exper2 + tenure + tenure2 + union + south | id + year,
+              data = nls_panel)
+
+# Compare
+export_summs(fe_individual, fe_year, twfe,
+             model.names = c("Individual FE", "Year FE", "Two-Way FE"),
+             digits = 4)
+```
+
+**Question 6:** What do year fixed effects control for? Give examples of factors that might affect all workers' wages in a given year.
+
+# 7. Clustered Standard Errors
+
+**Objective:**
+Understand why and how to cluster standard errors in panel data.
+
+**Instructions:**
+1. Compare standard errors with and without clustering.
+2. Explain why clustering matters.
+
+**Code:**
+
+```{r}
+# TWFE without clustering
+twfe_iid <- feols(lwage ~ exper + exper2 + tenure + tenure2 + union + south | id + year,
+                  vcov = "iid", data = nls_panel)
+
+# TWFE with clustering by individual
+twfe_cluster <- feols(lwage ~ exper + exper2 + tenure + tenure2 + union + south | id + year,
+                      cluster = "id", data = nls_panel)
+
+# Compare standard errors
+comparison <- tibble(
+  Variable = names(coef(twfe_iid)),
+  Coef = coef(twfe_iid),
+  SE_IID = sqrt(diag(vcov(twfe_iid))),
+  SE_Clustered = sqrt(diag(vcov(twfe_cluster)))
+) %>%
+  mutate(
+    SE_Ratio = SE_Clustered / SE_IID,
+    across(where(is.numeric), ~round(., 4))
+  )
+
+kable(comparison, caption = "IID vs Clustered Standard Errors")
+```
+
+**Question 7:** How do the clustered standard errors compare to the IID ones? Why should we cluster at the individual level in this application?
+
+# 8. Economic Interpretation
+
+**Objective:**
+Interpret the economic meaning of the results.
+
+**Using the Two-Way FE Model:**
+
+```{r}
+# Final preferred specification
+summary(twfe_cluster)
+```
+
+**Calculate Economic Magnitudes:**
+
+```{r}
+# Effect of one year of tenure
+tenure_effect <- coef(twfe_cluster)["tenure"] + 2 * coef(twfe_cluster)["tenure2"] * mean(nls_panel$tenure)
+cat("Effect of one additional year of tenure:", round(tenure_effect * 100, 2), "% wage increase\n")
+
+# Union wage premium
+union_effect <- coef(twfe_cluster)["union"]
+cat("Union wage premium:", round(union_effect * 100, 2), "%\n")
+```
+
+**Question 8:** Interpret the union coefficient. Does joining a union increase wages by the estimated amount, or is there a selection issue to consider?
+
+# Summary Questions
+
+Answer the following questions in complete sentences:
+
+1. **Model Comparison:** Create a table comparing the coefficient on union membership across pooled OLS, FE, RE, and TWFE. Explain why the estimates differ.
+
+2. **Hausman Test:** Explain in economic terms what it means when the Hausman test rejects random effects. What type of correlation does this suggest?
+
+3. **Returns to Education:** Why can't we estimate the returns to education with individual fixed effects? What alternative approaches might researchers use?
+
+4. **Policy Implication:** A labor economist wants to know whether joining a union causally increases wages. Based on your analysis:
+   a) What is your best estimate of the union wage premium?
+   b) What concerns remain about interpreting this as a causal effect?
+   c) What additional data or methods might help address these concerns?
+
+5. **Standard Errors:** Explain to a non-economist why we need to cluster standard errors when using panel data. What goes wrong if we don't cluster?
+
+# Bonus: Testing for Serial Correlation
+
+```{r}
+# Breusch-Godfrey test for serial correlation in FE model
+pbgtest(fe_hausman)
+```
+
+**Interpretation:** A significant result suggests serial correlation in the errors, which would require further corrections (e.g., robust standard errors that account for autocorrelation).
